@@ -341,6 +341,21 @@ func validateIP(ipn *net.IPNet) {
 	warning("Unable to confirm IPv%d address %s is assigned to this host", ip.Version(), ip)
 }
 
+
+// evaluateENVBool evaluates a passed environment variable and writes an
+// log entry if false otherwise it returns true by default
+
+func evaluateENVBool(envvar string, logentry string) bool {
+	switch strings.ToLower(os.Getenv(envvar)) {
+	case "false", "0", "no", "n", "f":
+		log.Info(logentry)
+		return false
+	}
+
+	return true
+
+}
+
 // autoDetectCIDR auto-detects the IP and Network using the requested
 // detection method.
 func autoDetectCIDR(method string, version int) *net.IPNet {
@@ -498,11 +513,11 @@ func configureIPPools(client *client.Client) {
 	// Ensure there are pools created for each IP version.
 	if !ipv4Present {
 		log.Debug("Create default IPv4 IP pool")
-		createIPPool(client, ipv4Cidr, ipv4IpipModeEnvVar)
+		createIPPool(client, ipv4Cidr, ipv4IpipModeEnvVar, evaluateENVBool("CALICO_IPPOOL_NAT_OUTGOING","NAT_Outgoing disabled for Default IPv4 Pool."))
 	}
 	if !ipv6Present && ipv6Supported() {
 		log.Debug("Create default IPv6 IP pool")
-		createIPPool(client, ipv6Cidr, string(ipip.Undefined))
+		createIPPool(client, ipv6Cidr, string(ipip.Undefined), evaluateENVBool("CALICO_IPPOOL_NAT_OUTGOING","NAT_Outgoing disabled for Default IPv6 Pool."))
 	}
 }
 
@@ -512,10 +527,8 @@ func configureIPPools(client *client.Client) {
 // simplistic check of /proc/sys/net/ipv6 (since platforms that do not have IPv6
 // compiled in will not have this entry).
 func ipv6Supported() bool {
-	// First check the Felix parm.
-	switch strings.ToLower(os.Getenv("FELIX_IPV6SUPPORT")) {
-	case "false", "0", "no", "n", "f":
-		log.Info("IPv6 support disabled through environment")
+	// First check if Felix param is false
+	if !evaluateENVBool("FELIX_IPV6SUPPORT","IPv6 support disabled through environment") {
 		return false
 	}
 
@@ -527,25 +540,14 @@ func ipv6Supported() bool {
 }
 
 // defineNATOutgoing checks the CALICO_NAT_OUTGOING parameter used for
-// default IPPool Creation. It returns a boolean.
+// default IPPool Creation
 
-func defineNATOutgoing () bool {
-	switch strings.ToLower(os.Getenv("CALICO_NAT_OUTGOING")) {
-	case "false", "0", "no", "n", "f":
-		log.Info("NAT_Outgoing disabled for Default IP Pool(s)")
-		return false
-	}
-
-	// If CALICO_NAT_OUTGOING was not disabled return default value (true)
-	return true
-}
 
 // createIPPool creates an IP pool using the specified CIDR.  This
 // method is a no-op if the pool already exists.
-func createIPPool(client *client.Client, cidr *net.IPNet, ipipModeName string) {
+func createIPPool(client *client.Client, cidr *net.IPNet, ipipModeName string, isNATOutgoingEnabled bool) {
 	version := cidr.Version()
 	ipipMode := ipip.Mode(ipipModeName)
-	natOutgoing := defineNATOutgoing()
 
 	// off is not an actual valid value so switch it to an empty string
 	if ipipModeName == "off" {
@@ -557,7 +559,7 @@ func createIPPool(client *client.Client, cidr *net.IPNet, ipipModeName string) {
 			CIDR: *cidr,
 		},
 		Spec: api.IPPoolSpec{
-			NATOutgoing: natOutgoing,
+			NATOutgoing: isNATOutgoingEnabled,
 			IPIP: &api.IPIPConfiguration{
 				Enabled: ipipMode != ipip.Undefined,
 				Mode:    ipipMode,
